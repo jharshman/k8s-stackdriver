@@ -13,16 +13,10 @@
 # limitations under the License.
 
 FROM golang:1.13-alpine as builder
-WORKDIR ${GOPATH}/src/github.com/GoogleCloudPlatform/k8s-stackdriver/prometheus-to-sd
-COPY . ./
-RUN CGO_ENABLED=0 GOOS=linux go build -mod=vendor -o /monitor
+COPY . /prometheus-to-sd/
+WORKDIR /prometheus-to-sd/
+RUN CGO_ENABLED=0 GOOS=linux go build -o monitor
 
-RUN apk update \
-    && apk add --no-cache govendor \
-    && govendor license +vendor > /NOTICES
-
-FROM gcr.io/distroless/static:latest
-# nobody:nobody
-USER 65534:65534
-COPY --from=builder /monitor /
-COPY --from=builder /NOTICES /
+FROM centos:7
+COPY --from=builder /prometheus-to-sd/monitor /usr/local/bin/
+ENTRYPOINT ["monitor"]

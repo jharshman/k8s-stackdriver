@@ -18,28 +18,23 @@ package main
 
 import (
 	"context"
-	//"expvar"
 	"flag"
 	"fmt"
 	"net/http"
-	//_ "net/http/pprof"
 	"net/url"
-	"os"
-	"os/signal"
-	"syscall"
 	"time"
-
-	"github.com/jharshman/async"
-
-	"github.com/golang/glog"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"golang.org/x/oauth2"
-	"golang.org/x/oauth2/google"
-	v3 "google.golang.org/api/monitoring/v3"
 
 	"github.com/GoogleCloudPlatform/k8s-stackdriver/prometheus-to-sd/config"
 	"github.com/GoogleCloudPlatform/k8s-stackdriver/prometheus-to-sd/flags"
 	"github.com/GoogleCloudPlatform/k8s-stackdriver/prometheus-to-sd/translator"
+	"github.com/go-chi/chi"
+	"github.com/golang/glog"
+	"github.com/jharshman/async"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/google"
+	v3 "google.golang.org/api/monitoring/v3"
+	"google.golang.org/api/option"
 )
 
 var (
@@ -78,8 +73,6 @@ var (
 		"If metric name starts with the component name then this substring is removed to keep metric name shorter.")
 	metricsPort    = flag.Uint("port", 6061, "Port on which metrics are exposed.")
 	listenAddress  = flag.String("listen-address", "", "Interface on which  metrics are exposed.")
-	//debugPort      = flag.Uint("debug-port", 16061, "Port on which debug information is exposed.")
-	//debugAddress   = flag.String("debug-address", "localhost", "Interface on which debug information is exposed.")
 	dynamicSources = flags.Uris{}
 	scrapeInterval = flag.Duration("scrape-interval", 60*time.Second,
 		"The interval between metric scrapes. If there are multiple scrapes between two exports, the last present value is exported, even when missing from last scraping.")
@@ -87,9 +80,6 @@ var (
 		"The interval between metric exports. Can't be lower than --scrape-interval.")
 	downcaseMetricNames = flag.Bool("downcase-metric-names", false,
 		"If enabled, will downcase all metric names.")
-	delayedShutdownTimeout = flag.Duration("delayed-shutdown-timeout", 120*time.Second,
-		"Time to wait for the shutdown after receiving SIGTERM. 0 value means shutdown immediately, negative value results in ignoring signal."+
-			" Default value is 120 seconds.")
 	gceTokenURL  = flag.String("gce-token-url", "", "URL to be used to obtain GCE access token")
 	gceTokenBody = flag.String("gce-token-body", "", "HTTP request body to be used to obtain GCE access token")
 )
@@ -103,23 +93,6 @@ func main() {
 
 	defer glog.Flush()
 	flag.Parse()
-
-	// todo: remove this. delayedShutdownTimeout only exists because the Google authors don't know how to close Goroutines.
-	if *delayedShutdownTimeout < 0 {
-		signal.Ignore(syscall.SIGTERM)
-	} else {
-		sigTermChannel := make(chan os.Signal, 1)
-		signal.Notify(sigTermChannel, syscall.SIGTERM)
-
-		go func() {
-			<-sigTermChannel
-			glog.Infof("SIGTERM has been received, Waiting %s before the shutdown.", delayedShutdownTimeout.String())
-
-			time.Sleep(*delayedShutdownTimeout)
-			glog.Info("Shutting down after receiving SIGTERM.")
-			os.Exit(0)
-		}()
-	}
 
 	gceConf, err := config.GetGceConfig(*projectOverride, *clusterNameOverride, *clusterLocationOverride, *zoneOverride, *nodeOverride)
 	if err != nil {
@@ -137,20 +110,6 @@ func main() {
 		}
 		glog.Infof("Monitored resource labels: %v", monitoredResourceLabels)
 	}
-
-
-	// todo: define router for /metrics, /ready, and /live.
-	// todo: fix this, starts goroutine with no plan to close it...
-	metricsEndpoinit := async.Job{
-		Run:     nil,
-		Close:   nil,
-		Signals: nil,
-		Next:    nil,
-	}
-	go func() {
-		http.Handle("/metrics", promhttp.Handler())
-		glog.Error(http.ListenAndServe(fmt.Sprintf("%s:%d", *listenAddress, *metricsPort), nil))
-	}()
 
 	var client *http.Client
 
@@ -170,7 +129,7 @@ func main() {
 		client = oauth2.NewClient(context.Background(), ts)
 	}
 
-	stackdriverService, err := v3.New(client)
+	stackdriverService, err := v3.NewService(context.Background(), option.WithHTTPClient(client))
 	if *apioverride != "" {
 		stackdriverService.BasePath = *apioverride
 	}
@@ -194,8 +153,28 @@ func main() {
 		go readAndPushDataToStackdriver(stackdriverService, gceConf, sourceConfig, monitoredResourceLabels, *monitoredResourceTypePrefix)
 	}
 
-	// As worker goroutines work forever, block main thread as well.
-	<-make(chan int)
+	// todo: ready and live probes should be more intelligent.
+	router := chi.NewRouter()
+	router.Get("/ready", func(writer http.ResponseWriter, request *http.Request) {
+		writer.WriteHeader(200)
+	})
+	router.Get("/live", func(writer http.ResponseWriter, request *http.Request) {
+		writer.WriteHeader(200)
+	})
+	router.Handle("/metrics", promhttp.Handler())
+
+	srv := http.Server{
+		Addr:    fmt.Sprintf("%s:%d", *listenAddress, *metricsPort),
+		Handler: router,
+	}
+	// By default async.Job will trigger Close on SIGINT or SIGTERM.
+	httpServeJob := async.Job{
+		Run: srv.ListenAndServe,
+		Close: func() error {
+			return srv.Shutdown(context.Background())
+		},
+	}
+	glog.Error(httpServeJob.Execute())
 }
 
 func getSourceConfigs(defaultMetricsPrefix string, gceConfig *config.GceConfig) []*config.SourceConfig {
