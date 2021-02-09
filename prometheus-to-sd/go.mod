@@ -5,6 +5,7 @@ go 1.13
 require (
 	cloud.google.com/go v0.56.0
 	github.com/golang/glog v0.0.0-20160126235308-23def4e6c14b
+	github.com/jharshman/async v0.0.2 // indirect
 	github.com/prometheus/client_golang v1.6.0
 	github.com/prometheus/client_model v0.2.0
 	github.com/prometheus/common v0.9.1

@@ -18,16 +18,18 @@ package main
 
 import (
 	"context"
-	"expvar"
+	//"expvar"
 	"flag"
 	"fmt"
 	"net/http"
-	_ "net/http/pprof"
+	//_ "net/http/pprof"
 	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/jharshman/async"
 
 	"github.com/golang/glog"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -76,8 +78,8 @@ var (
 		"If metric name starts with the component name then this substring is removed to keep metric name shorter.")
 	metricsPort    = flag.Uint("port", 6061, "Port on which metrics are exposed.")
 	listenAddress  = flag.String("listen-address", "", "Interface on which  metrics are exposed.")
-	debugPort      = flag.Uint("debug-port", 16061, "Port on which debug information is exposed.")
-	debugAddress   = flag.String("debug-address", "localhost", "Interface on which debug information is exposed.")
+	//debugPort      = flag.Uint("debug-port", 16061, "Port on which debug information is exposed.")
+	//debugAddress   = flag.String("debug-address", "localhost", "Interface on which debug information is exposed.")
 	dynamicSources = flags.Uris{}
 	scrapeInterval = flag.Duration("scrape-interval", 60*time.Second,
 		"The interval between metric scrapes. If there are multiple scrapes between two exports, the last present value is exported, even when missing from last scraping.")
@@ -102,6 +104,7 @@ func main() {
 	defer glog.Flush()
 	flag.Parse()
 
+	// todo: remove this. delayedShutdownTimeout only exists because the Google authors don't know how to close Goroutines.
 	if *delayedShutdownTimeout < 0 {
 		signal.Ignore(syscall.SIGTERM)
 	} else {
@@ -135,13 +138,18 @@ func main() {
 		glog.Infof("Monitored resource labels: %v", monitoredResourceLabels)
 	}
 
+
+	// todo: define router for /metrics, /ready, and /live.
+	// todo: fix this, starts goroutine with no plan to close it...
+	metricsEndpoinit := async.Job{
+		Run:     nil,
+		Close:   nil,
+		Signals: nil,
+		Next:    nil,
+	}
 	go func() {
 		http.Handle("/metrics", promhttp.Handler())
 		glog.Error(http.ListenAndServe(fmt.Sprintf("%s:%d", *listenAddress, *metricsPort), nil))
-	}()
-
-	go func() {
-		glog.Error(http.ListenAndServe(fmt.Sprintf("%s:%d", *debugAddress, *debugPort), expvar.Handler()))
 	}()
 
 	var client *http.Client
