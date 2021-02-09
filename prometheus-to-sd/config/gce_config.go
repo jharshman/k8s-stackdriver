@@ -31,6 +31,8 @@ type GceConfig struct {
 	Cluster         string
 	ClusterLocation string
 	// This is actually instance name.
+	// instance/name is not available from the GKE metadata server.
+	// in that case it is replaced with instance/hostname.
 	Instance   string
 	InstanceId string
 }

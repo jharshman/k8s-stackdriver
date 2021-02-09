@@ -14,9 +14,10 @@
 
 all: build
 
+NAME ?= prometheus-to-sd
 ENVVAR = GOOS=linux GOARCH=amd64 CGO_ENABLED=0
-PREFIX = staging-k8s.gcr.io
-TAG = v0.11.1
+PREFIX ?= staging-k8s.gcr.io
+TAG ?= v0.11.1
 
 build:
 	$(ENVVAR) go build -mod=vendor -a -o monitor
@@ -25,10 +26,10 @@ test:
 	$(ENVVAR) go test -mod=vendor ./...
 
 container:
-	docker build --pull -t ${PREFIX}/prometheus-to-sd:$(TAG) .
+	docker build -t $(PREFIX)/$(NAME):$(TAG) .
 
 push: container
-	gcloud docker -- push ${PREFIX}/prometheus-to-sd:$(TAG)
+	gcloud docker -- push $(PREFIX)/$(NAME):$(TAG)
 
 clean:
 	rm -rf monitor
