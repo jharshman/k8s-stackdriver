@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"time"
 
 	"github.com/GoogleCloudPlatform/k8s-stackdriver/prometheus-to-sd/config"
@@ -31,8 +32,6 @@ import (
 	"github.com/golang/glog"
 	"github.com/jharshman/async"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"golang.org/x/oauth2"
-	"golang.org/x/oauth2/google"
 	v3 "google.golang.org/api/monitoring/v3"
 	"google.golang.org/api/option"
 )
@@ -101,7 +100,12 @@ func main() {
 	glog.Infof("GCE config: %+v", gceConf)
 
 	sourceConfigs := getSourceConfigs(*metricsPrefix, gceConf)
-	glog.Infof("Built the following source configs: %v", sourceConfigs)
+	if len(sourceConfigs) > 0 {
+		glog.Info("built the following source configurations:")
+		for _, v := range sourceConfigs {
+			glog.Infof("%+v\n", v)
+		}
+	}
 
 	monitoredResourceLabels := parseMonitoredResourceLabels(*monitoredResourceLabels)
 	if len(monitoredResourceLabels) > 0 {
@@ -111,25 +115,25 @@ func main() {
 		glog.Infof("Monitored resource labels: %v", monitoredResourceLabels)
 	}
 
-	var client *http.Client
-
-	if *gceTokenURL != "" {
-		client = oauth2.NewClient(context.Background(), config.NewAltTokenSource(*gceTokenURL, *gceTokenBody))
-	} else if *projectOverride != "" {
-		client, err = google.DefaultClient(context.Background(), "https://www.googleapis.com/auth/cloud-platform")
-		if err != nil {
-			glog.Fatalf("Error getting default credentials: %v", err)
-		}
-		glog.Infof("Created a client with the default credentials")
-	} else {
-		ts, err := google.DefaultTokenSource(context.Background(), "")
-		if err != nil {
-			glog.Fatalf("Error creating default token source: %v", err)
-		}
-		client = oauth2.NewClient(context.Background(), ts)
-	}
-
-	stackdriverService, err := v3.NewService(context.Background(), option.WithHTTPClient(client))
+	//var client *http.Client
+	//
+	//if *gceTokenURL != "" {
+	//	client = oauth2.NewClient(context.Background(), config.NewAltTokenSource(*gceTokenURL, *gceTokenBody))
+	//} else if *projectOverride != "" {
+	//	client, err = google.DefaultClient(context.Background(), "https://www.googleapis.com/auth/cloud-platform")
+	//	if err != nil {
+	//		glog.Fatalf("Error getting default credentials: %v", err)
+	//	}
+	//	glog.Infof("Created a client with the default credentials")
+	//} else {
+	//	ts, err := google.DefaultTokenSource(context.Background(), "")
+	//	if err != nil {
+	//		glog.Fatalf("Error creating default token source: %v", err)
+	//	}
+	//	client = oauth2.NewClient(context.Background(), ts)
+	//}
+	stackdriverService, err := v3.NewService(context.Background(), option.WithCredentialsFile(os.Getenv("GOOGLE_APPLICATION_CREDENTIALS")))
+	//stackdriverService, err := v3.NewService(context.Background(), option.WithHTTPClient(client))
 	if *apioverride != "" {
 		stackdriverService.BasePath = *apioverride
 	}
