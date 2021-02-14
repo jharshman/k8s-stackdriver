@@ -87,7 +87,10 @@ func GetGceConfig(project, cluster, clusterLocation, zone, node string) (*GceCon
 	if node == "" {
 		node, err = gce.InstanceName()
 		if err != nil {
-			return nil, fmt.Errorf("error while getting instance (node) name: %v", err)
+			node, err = gce.Hostname()
+			if err != nil {
+				return nil, fmt.Errorf("error while getting instance (node) name: %v", err)
+			}
 		}
 	}
 
