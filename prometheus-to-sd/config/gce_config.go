@@ -88,6 +88,7 @@ func GetGceConfig(project, cluster, clusterLocation, zone, node string) (*GceCon
 
 	// instance/name endpoint is not available on the GKE metadata server.
 	// Try GCE instance/name endpoint. If error, try instance/hostname.
+	// If instance/hostname, remove domain to replicate instance/name.
 	if node == "" {
 		node, err = gce.InstanceName()
 		if err != nil {
@@ -95,6 +96,7 @@ func GetGceConfig(project, cluster, clusterLocation, zone, node string) (*GceCon
 			if err != nil {
 				return nil, fmt.Errorf("error while getting instance (node) name: %v", err)
 			}
+			node = strings.Split(node, ".")[0]
 		}
 	}
 

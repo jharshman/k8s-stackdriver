@@ -20,9 +20,10 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/google"
 	"net/http"
 	"net/url"
-	"os"
 	"time"
 
 	"github.com/GoogleCloudPlatform/k8s-stackdriver/prometheus-to-sd/config"
@@ -35,6 +36,8 @@ import (
 	v3 "google.golang.org/api/monitoring/v3"
 	"google.golang.org/api/option"
 )
+
+const GAP = "GOOGLE_APPLICATION_CREDENTIALS"
 
 var (
 	metricsPrefix = flag.String("stackdriver-prefix", "container.googleapis.com/master",
@@ -115,24 +118,40 @@ func main() {
 		glog.Infof("Monitored resource labels: %v", monitoredResourceLabels)
 	}
 
-	//var client *http.Client
-	//
-	//if *gceTokenURL != "" {
-	//	client = oauth2.NewClient(context.Background(), config.NewAltTokenSource(*gceTokenURL, *gceTokenBody))
+	// todo: support two methods of authentication, WORKLOAD IDENTITY and GOOGLE_APPLICATION_CREDENTIALS
+	//tokenSource, err := google.DefaultTokenSource(context.Background(), "")
+	//if err != nil {
+	//	glog.Fatalf("Error creating default token source: %v", err)
+	//}
+	//stackdriverService, err := v3.NewService(context.Background(), option.WithTokenSource(tokenSource))
+
+	var opts []option.ClientOption
+
+	if *gceTokenURL != "" { // todo: what happens if gceTokenBody isn't set??
+		//client = oauth2.NewClient(context.Background(), config.NewAltTokenSource(*gceTokenURL, *gceTokenBody))
+		opts = append(opts, option.WithTokenSource(config.NewAltTokenSource(*gceTokenURL, *gceTokenBody)))
 	//} else if *projectOverride != "" {
 	//	client, err = google.DefaultClient(context.Background(), "https://www.googleapis.com/auth/cloud-platform")
 	//	if err != nil {
 	//		glog.Fatalf("Error getting default credentials: %v", err)
 	//	}
 	//	glog.Infof("Created a client with the default credentials")
-	//} else {
-	//	ts, err := google.DefaultTokenSource(context.Background(), "")
-	//	if err != nil {
-	//		glog.Fatalf("Error creating default token source: %v", err)
-	//	}
-	//	client = oauth2.NewClient(context.Background(), ts)
-	//}
-	stackdriverService, err := v3.NewService(context.Background(), option.WithCredentialsFile(os.Getenv("GOOGLE_APPLICATION_CREDENTIALS")))
+	} else {
+		ts, err := google.DefaultTokenSource(context.Background(), "") // todo investigate why DefaultTokenSource results in not being able to authenticate...
+		if err != nil {
+			glog.Fatalf("Error creating default token source: %v", err)
+		}
+		t, err := ts.Token()
+		if err != nil {
+			glog.Infof("debug tokensource error: %v\n", err)
+		}
+		glog.Infof("debug tokensource: #%v\n", t)
+		//client = oauth2.NewClient(context.Background(), ts)
+		opts = append(opts, option.WithTokenSource(ts))
+	}
+	// the reason the DefaultTokenSOurce() call results in an invlid token source is because it fails to put scopes on anything...
+	stackdriverService, err := v3.NewService(context.Background(), opts...)
+	//stackdriverService, err := v3.NewService(context.Background(), option.WithCredentialsFile(os.Getenv("GOOGLE_APPLICATION_CREDENTIALS")))
 	//stackdriverService, err := v3.NewService(context.Background(), option.WithHTTPClient(client))
 	if *apioverride != "" {
 		stackdriverService.BasePath = *apioverride
