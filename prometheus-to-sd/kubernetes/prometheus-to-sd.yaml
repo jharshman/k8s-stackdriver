@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prom2sd
+  namespace: kube-state-metrics
+  labels:
+    app: "prom2sd"
+    env: "staging"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: "prom2sd"
+      env: "staging"
+  template:
+    metadata:
+      labels:
+        app: "prom2sd"
+        env: "staging"
+    spec:
+      containers:
+        - name: "prom2sd"
+          image: "jharshman/prom2sd:fix-auth-issue-01"
+          imagePullPolicy: "Always"
+          args:
+            - /monitor
+            - -stackdriver-prefix=custom.googleapis.com
+            - -source=kube-state-metrics:http://kube-state-metrics.kube-state-metrics.svc.cluster.local:8080
+            - -pod-id=kube-state-metrics
+            - -namespace-id=kube-state-metrics
+          env:
+            - name: GOOGLE_APPLICATION_CREDENTIALS
+              value: "/mnt/serviceaccount"
+#          livenessProbe:
+#            httpGet:
+#              path: /live
+#              port: 6061
+#          readinessProbe:
+#            httpGet:
+#              path: /ready
+#              port: 6061
+          volumeMounts:
+            - name: google-sa
+              mountPath: /mnt/
+      volumes:
+        - name: google-sa
+          secret:
+            secretName: prom2sd-sa-json
