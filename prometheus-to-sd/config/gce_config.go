@@ -17,12 +17,15 @@ limitations under the License.
 package config
 
 import (
-	"fmt"
+	"errors"
 	"strings"
+	"sync"
 
 	gce "cloud.google.com/go/compute/metadata"
-	"github.com/golang/glog"
 )
+
+var Config *GceConfig
+var once sync.Once
 
 // GceConfig aggregates all GCE related configuration parameters.
 type GceConfig struct {
@@ -38,97 +41,57 @@ type GceConfig struct {
 }
 
 // GetGceConfig builds GceConfig based on the provided prefix and metadata server available on GCE.
-func GetGceConfig(project, cluster, clusterLocation, zone, node string) (*GceConfig, error) {
-	if project != "" {
-		glog.Infof("Using metadata all from flags")
-		if cluster == "" {
-			glog.Warning("Cluster name was not set. This can be set with --cluster-name")
+func GetGceConfig() error {
+	once.Do(func() {
+		project, err := gce.ProjectID()
+
+		cluster, err := gce.InstanceAttributeValue("cluster-name")
+		cluster = strings.TrimSpace(cluster)
+
+		// instance/name endpoint is not available on the GKE metadata server.
+		// Try GCE instance/name endpoint. If error, try instance/hostname.
+		// If instance/hostname, remove domain to replicate instance/name.
+		node, err := gce.InstanceName()
+		if err != nil {
+			node, err = gce.Hostname()
+			if err == nil {
+				node = strings.Split(node, ".")[0]
+			}
 		}
-		if clusterLocation == "" {
-			glog.Warning("Cluster location was not set. This can be set with --cluster-location")
-		}
-		if zone == "" {
-			// zone is only used by the older gke_container
-			glog.Info("Zone was not set. This can be set with --zone-override")
-		}
-		if node == "" {
-			glog.Warning("Node was not set. This can be set with --node-name")
-		}
-		return &GceConfig{
+
+		instanceId, _ := gce.InstanceID()
+		zone, _ := gce.Zone()
+		clusterLocation, _ := gce.InstanceAttributeValue("cluster-location")
+		clusterLocation = strings.TrimSpace(clusterLocation)
+
+		Config = &GceConfig{
 			Project:         project,
 			Zone:            zone,
 			Cluster:         cluster,
 			ClusterLocation: clusterLocation,
 			Instance:        node,
-		}, nil
-	}
-
-	if !gce.OnGCE() {
-		return nil, fmt.Errorf("Not running on GCE.")
-	}
-
-	var err error
-	if project == "" {
-		project, err = gce.ProjectID()
-		if err != nil {
-			return nil, fmt.Errorf("error while getting project id: %v", err)
+			InstanceId:      instanceId,
 		}
-	}
+	})
 
-	if cluster == "" {
-		cluster, err = gce.InstanceAttributeValue("cluster-name")
-		if err != nil {
-			return nil, fmt.Errorf("error while getting cluster name: %v", err)
-		}
-		cluster = strings.TrimSpace(cluster)
-		if cluster == "" {
-			return nil, fmt.Errorf("cluster-name metadata was empty")
-		}
+	// ensure that Configuration is good
+	if Config.Project == "" {
+		return errors.New("project ID empty")
 	}
-
-	// instance/name endpoint is not available on the GKE metadata server.
-	// Try GCE instance/name endpoint. If error, try instance/hostname.
-	// If instance/hostname, remove domain to replicate instance/name.
-	if node == "" {
-		node, err = gce.InstanceName()
-		if err != nil {
-			node, err = gce.Hostname()
-			if err != nil {
-				return nil, fmt.Errorf("error while getting instance (node) name: %v", err)
-			}
-			node = strings.Split(node, ".")[0]
-		}
+	if Config.Cluster == "" {
+		return errors.New("cluster empty")
 	}
-
-	instanceId, err := gce.InstanceID()
-	if err != nil {
-		return nil, fmt.Errorf("error while getting instance id: %v", err)
+	if Config.ClusterLocation == "" {
+		return errors.New("cluster location empty")
 	}
-
-	if zone == "" {
-		zone, err = gce.Zone()
-		if err != nil {
-			return nil, fmt.Errorf("error while getting zone: %v", err)
-		}
+	if Config.Instance == "" {
+		return errors.New("instance/host name empty")
 	}
-
-	if clusterLocation == "" {
-		clusterLocation, err = gce.InstanceAttributeValue("cluster-location")
-		if err != nil {
-			return nil, fmt.Errorf("error while getting cluster location: %v", err)
-		}
-		clusterLocation = strings.TrimSpace(clusterLocation)
-		if clusterLocation == "" {
-			return nil, fmt.Errorf("cluster-location metadata was empty")
-		}
+	if Config.InstanceId == "" {
+		return errors.New("instance ID empty")
 	}
-
-	return &GceConfig{
-		Project:         project,
-		Zone:            zone,
-		Cluster:         cluster,
-		ClusterLocation: clusterLocation,
-		Instance:        node,
-		InstanceId:      instanceId,
-	}, nil
+	if Config.Zone == "" {
+		return errors.New("zone empty")
+	}
+	return nil
 }

@@ -19,25 +19,24 @@ package main
 import (
 	"context"
 	"flag"
-	"fmt"
-	"golang.org/x/oauth2"
-	"golang.org/x/oauth2/google"
-	"net/http"
 	"net/url"
+	"os"
 	"time"
 
 	"github.com/GoogleCloudPlatform/k8s-stackdriver/prometheus-to-sd/config"
 	"github.com/GoogleCloudPlatform/k8s-stackdriver/prometheus-to-sd/flags"
 	"github.com/GoogleCloudPlatform/k8s-stackdriver/prometheus-to-sd/translator"
-	"github.com/go-chi/chi"
 	"github.com/golang/glog"
 	"github.com/jharshman/async"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	v3 "google.golang.org/api/monitoring/v3"
 	"google.golang.org/api/option"
 )
 
 const GAP = "GOOGLE_APPLICATION_CREDENTIALS"
+
+var (
+	stackdriverOK bool
+)
 
 var (
 	metricsPrefix = flag.String("stackdriver-prefix", "container.googleapis.com/master",
@@ -52,18 +51,8 @@ var (
 	source = flags.Uris{}
 	podId  = flag.String("pod-id", "machine",
 		"Name of the pod in which monitored component is running.")
-	nodeOverride = flag.String("node-name", "",
-		"Node name to use. If not set, defaults to value from GCE Metadata Server.")
 	namespaceId = flag.String("namespace-id", "",
 		"Namespace name of the pod in which monitored component is running.")
-	zoneOverride = flag.String("zone-override", "",
-		"Name of the zone to override the default one (in which component is running).")
-	clusterNameOverride = flag.String("cluster-name", "",
-		"Cluster name to use. If not set, defaults to value from GCE Metadata Server.")
-	clusterLocationOverride = flag.String("cluster-location", "",
-		"Cluster location to use. If not set, defaults to value from GCE Metadata Server.")
-	projectOverride = flag.String("project-id", "",
-		"GCP project to send metrics to. If not set, defaults to value from GCE Metadata Server.")
 	monitoredResourceTypePrefix = flag.String("monitored-resource-type-prefix", "", "MonitoredResource type prefix, to be appended by 'container', 'pod', and 'node'.")
 	monitoredResourceLabels     = flag.String("monitored-resource-labels", "", "Manually specified MonitoredResource labels. "+
 		"It is in URL parameter format, like 'A=B&C=D&E=F'. "+
@@ -82,8 +71,6 @@ var (
 		"The interval between metric exports. Can't be lower than --scrape-interval.")
 	downcaseMetricNames = flag.Bool("downcase-metric-names", false,
 		"If enabled, will downcase all metric names.")
-	gceTokenURL  = flag.String("gce-token-url", "", "URL to be used to obtain GCE access token")
-	gceTokenBody = flag.String("gce-token-body", "", "HTTP request body to be used to obtain GCE access token")
 )
 
 func main() {
@@ -96,18 +83,23 @@ func main() {
 	defer glog.Flush()
 	flag.Parse()
 
-	gceConf, err := config.GetGceConfig(*projectOverride, *clusterNameOverride, *clusterLocationOverride, *zoneOverride, *nodeOverride)
+	err := config.GetGceConfig()
 	if err != nil {
-		glog.Fatalf("Failed to get GCE config: %v", err)
+		glog.Fatalf("encountered error(s) with configuration: %v", err)
 	}
-	glog.Infof("GCE config: %+v", gceConf)
 
-	sourceConfigs := getSourceConfigs(*metricsPrefix, gceConf)
+	sourceConfigs := getSourceConfigs(*metricsPrefix, config.Config)
 	if len(sourceConfigs) > 0 {
 		glog.Info("built the following source configurations:")
 		for _, v := range sourceConfigs {
 			glog.Infof("%+v\n", v)
 		}
+	} else {
+		glog.Fatalf("No sources defined. Please specify at least one --source flag.")
+	}
+
+	if *scrapeInterval > *exportInterval {
+		glog.Fatalf("--scrape-interval cannot be bigger than --export-interval")
 	}
 
 	monitoredResourceLabels := parseMonitoredResourceLabels(*monitoredResourceLabels)
@@ -118,78 +110,33 @@ func main() {
 		glog.Infof("Monitored resource labels: %v", monitoredResourceLabels)
 	}
 
-	// todo: support two methods of authentication, WORKLOAD IDENTITY and GOOGLE_APPLICATION_CREDENTIALS
-	//tokenSource, err := google.DefaultTokenSource(context.Background(), "")
-	//if err != nil {
-	//	glog.Fatalf("Error creating default token source: %v", err)
-	//}
-	//stackdriverService, err := v3.NewService(context.Background(), option.WithTokenSource(tokenSource))
-
 	var opts []option.ClientOption
-
-	if *gceTokenURL != "" { // todo: what happens if gceTokenBody isn't set??
-		//client = oauth2.NewClient(context.Background(), config.NewAltTokenSource(*gceTokenURL, *gceTokenBody))
-		opts = append(opts, option.WithTokenSource(config.NewAltTokenSource(*gceTokenURL, *gceTokenBody)))
-	//} else if *projectOverride != "" {
-	//	client, err = google.DefaultClient(context.Background(), "https://www.googleapis.com/auth/cloud-platform")
-	//	if err != nil {
-	//		glog.Fatalf("Error getting default credentials: %v", err)
-	//	}
-	//	glog.Infof("Created a client with the default credentials")
-	} else {
-		ts, err := google.DefaultTokenSource(context.Background(), "") // todo investigate why DefaultTokenSource results in not being able to authenticate...
-		if err != nil {
-			glog.Fatalf("Error creating default token source: %v", err)
-		}
-		t, err := ts.Token()
-		if err != nil {
-			glog.Infof("debug tokensource error: %v\n", err)
-		}
-		glog.Infof("debug tokensource: #%v\n", t)
-		//client = oauth2.NewClient(context.Background(), ts)
-		opts = append(opts, option.WithTokenSource(ts))
+	serviceAccountJSONPath := os.Getenv(GAP)
+	if serviceAccountJSONPath != "" {
+		opts = append(opts, option.WithCredentialsFile(serviceAccountJSONPath))
 	}
-	// the reason the DefaultTokenSOurce() call results in an invlid token source is because it fails to put scopes on anything...
 	stackdriverService, err := v3.NewService(context.Background(), opts...)
-	//stackdriverService, err := v3.NewService(context.Background(), option.WithCredentialsFile(os.Getenv("GOOGLE_APPLICATION_CREDENTIALS")))
-	//stackdriverService, err := v3.NewService(context.Background(), option.WithHTTPClient(client))
-	if *apioverride != "" {
-		stackdriverService.BasePath = *apioverride
-	}
 	if err != nil {
 		glog.Fatalf("Failed to create Stackdriver client: %v", err)
 	}
 	glog.V(4).Infof("Successfully created Stackdriver client")
+	glog.V(4).Infof("Testing Stackdriver client")
+	stackdriverOK = ensureFunctional(stackdriverService)
 
-	if len(sourceConfigs) == 0 {
-		glog.Fatalf("No sources defined. Please specify at least one --source flag.")
+	if *apioverride != "" {
+		stackdriverService.BasePath = *apioverride
 	}
 
-	if *scrapeInterval > *exportInterval {
-		glog.Fatalf("--scrape-interval cannot be bigger than --export-interval")
-	}
-
+	// TODO: this should be re-written to finish pushing current data to stackdriver and then exit...
+	// otherwise, data in the pipe may or may not be written when the container exists via SIGKILL after the SIGTERM timeout.
 	for _, sourceConfig := range sourceConfigs {
 		glog.V(4).Infof("Starting goroutine for %+v", sourceConfig)
 
 		// Pass sourceConfig as a parameter to avoid using the last sourceConfig by all goroutines.
-		go readAndPushDataToStackdriver(stackdriverService, gceConf, sourceConfig, monitoredResourceLabels, *monitoredResourceTypePrefix)
+		go readAndPushDataToStackdriver(stackdriverService, config.Config, sourceConfig, monitoredResourceLabels, *monitoredResourceTypePrefix)
 	}
 
-	// todo: ready and live probes should be more intelligent.
-	router := chi.NewRouter()
-	router.Get("/ready", func(writer http.ResponseWriter, request *http.Request) {
-		writer.WriteHeader(200)
-	})
-	router.Get("/live", func(writer http.ResponseWriter, request *http.Request) {
-		writer.WriteHeader(200)
-	})
-	router.Handle("/metrics", promhttp.Handler())
-
-	srv := http.Server{
-		Addr:    fmt.Sprintf("%s:%d", *listenAddress, *metricsPort),
-		Handler: router,
-	}
+	srv := setupRouter()
 	// By default async.Job will trigger Close on SIGINT or SIGTERM.
 	httpServeJob := async.Job{
 		Run: srv.ListenAndServe,
