@@ -6,6 +6,8 @@ github.com/beorn7/perks/quantile
 github.com/cespare/xxhash/v2
 # github.com/davecgh/go-spew v1.1.1
 github.com/davecgh/go-spew/spew
+# github.com/go-chi/chi v1.5.1
+github.com/go-chi/chi
 # github.com/gogo/protobuf v1.2.2-0.20190723190241-65acae22fc9d
 github.com/gogo/protobuf/proto
 github.com/gogo/protobuf/sortkeys
@@ -27,6 +29,8 @@ github.com/googleapis/gax-go/v2
 github.com/googleapis/gnostic/OpenAPIv2
 github.com/googleapis/gnostic/compiler
 github.com/googleapis/gnostic/extensions
+# github.com/jharshman/async v0.0.2
+github.com/jharshman/async
 # github.com/json-iterator/go v1.1.9
 github.com/json-iterator/go
 # github.com/matttproud/golang_protobuf_extensions v1.0.1
